@@ -1,0 +1,38 @@
+# Paths are relative to this YAML file. Question indices start at 0.
+trait: sycophantic
+source:
+  repository: https://github.com/safety-research/persona_vectors
+  revision: b8e0f044fe2410a6fad579f38324f03f13b4e917
+files:
+  extract:
+    path: ../data/persona_vectors/sycophantic_extract.json
+    sha256: b54aca6998342cbf9f72d508eddfe9d7d1b413059d0cdfa819fdac921f19e4e7
+  eval:
+    path: ../data/persona_vectors/sycophantic_eval.json
+    sha256: 442a623cb55aa24bda2ba38962a276136771f0637f8f32bd690a144240bba39c
+split:
+  dev:
+  - 4
+  - 5
+  - 6
+  - 9
+  - 12
+  - 13
+  - 14
+  - 15
+  - 18
+  - 19
+  test:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 7
+  - 8
+  - 10
+  - 11
+  - 16
+  - 17
+repeats:
+  extract: 2
+  eval: 2

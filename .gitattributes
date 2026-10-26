@@ -1,0 +1,2 @@
+# Preserve upstream JSON bytes: SHA-256 checks include line endings.
+/data/persona_vectors/*.json -text
