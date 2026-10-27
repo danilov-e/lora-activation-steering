@@ -1,0 +1,9 @@
+model: gpt-4.1-mini-2025-04-14
+base_url: https://apinet.cloud/v1
+api_key_env: OPENAI_API_KEY
+timeout: 90
+max_retries: 4
+concurrency: 4
+coherence_prompt:
+  path: ../data/persona_vectors/coherence_prompt.txt
+  sha256: 78945e05210836da5c492e01cead92cdc8f8aa40f1b0c22d162b4dc2a1344a97
