@@ -110,6 +110,15 @@ def test_grid_has_one_baseline_and_unique_job_ids():
     assert "condition" not in base[0]
 
 
+def test_wide_grid_covers_layer_and_alpha_ranges():
+    conditions = load_conditions(ROOT / "configs/steering_dev_wide.yaml", n_layers=28)
+    assert len(conditions) == 109
+    assert sum(c["alpha"] == 0 for c in conditions) == 1
+    assert min(c["alpha"] for c in conditions) == -3
+    assert max(c["alpha"] for c in conditions) == 3
+    assert {c["layer"] for c in conditions if c["layer"] is not None} == {0, 4, 8, 12, 14, 16, 20, 24, 27}
+
+
 @pytest.mark.parametrize("config", [
     {"layers": [True], "alphas": [0, 1]},
     {"layers": [2], "alphas": [0, 1]},
@@ -182,6 +191,89 @@ def test_existing_output_rejected_before_model_loading(tmp_path, prepared, monke
     monkeypatch.setattr(run_steering, "load_model_and_tokenizer", fail)
     with pytest.raises(FileExistsError):
         run_steering.main()
+
+
+@pytest.mark.parametrize("saved_rows", [2, 4])
+def test_resume_matches_uninterrupted_sweep_and_skips_cached_batches(tmp_path, prepared, monkeypatch, saved_rows):
+    reference, resumed = tmp_path / "reference", tmp_path / "resumed"
+    args = ["run_steering", *prepared, "--limit", "3"]
+    monkeypatch.setattr(sys, "argv", [*args, "--output", str(reference)])
+    run_steering.main()
+    expected = (reference / "answers.jsonl").read_bytes()
+    rows = [json.loads(line) for line in expected.decode().splitlines()]
+    resumed.mkdir()
+    for name in ("jobs.jsonl", "manifest.json"):
+        (resumed / name).write_bytes((reference / name).read_bytes())
+    prefix = b"\n".join(expected.splitlines()[:saved_rows]) + b"\n"
+    (resumed / "answers.jsonl").write_bytes(prefix)
+    original = run_steering.generate_batch
+    calls = []
+    def tracked(model, tokenizer, jobs, settings, *, seed):
+        calls.append([job["id"] for job in jobs])
+        return original(model, tokenizer, jobs, settings, seed=seed)
+    monkeypatch.setattr(run_steering, "generate_batch", tracked)
+    monkeypatch.setattr(sys, "argv", [*args, "--output", str(resumed), "--resume"])
+    run_steering.main()
+    assert (resumed / "answers.jsonl").read_bytes() == expected
+    assert (resumed / "answers.jsonl").read_bytes().startswith(prefix)
+    expected_calls = 9 if saved_rows == 2 else 8
+    assert len(calls) == expected_calls
+    assert calls[0][0] == rows[2 if saved_rows == 2 else 3]["id"]
+    summary = json.loads((resumed / "summary.json").read_text())
+    assert summary["cached_answers"] == saved_rows and summary["n_answers"] == 15
+    assert summary["conditions"] == json.loads((reference / "summary.json").read_text())["conditions"]
+    calls.clear()
+    run_steering.main()
+    assert calls == []
+
+
+def test_interruption_preserves_batches_and_removes_hook(tmp_path, prepared, monkeypatch):
+    output = tmp_path / "interrupted"
+    args = ["run_steering", *prepared, "--limit", "3", "--output", str(output)]
+    original_generate = run_steering.generate_batch
+    original_loader = run_steering.load_model_and_tokenizer
+    loaded_models = []
+    def loader(settings):
+        model, tokenizer = original_loader(settings)
+        loaded_models.append(model)
+        return model, tokenizer
+    def fail(model, tokenizer, jobs, settings, *, seed):
+        if jobs[0]["condition"] != "baseline":
+            raise RuntimeError("interrupted while steering")
+        return original_generate(model, tokenizer, jobs, settings, seed=seed)
+    monkeypatch.setattr(run_steering, "load_model_and_tokenizer", loader)
+    monkeypatch.setattr(run_steering, "generate_batch", fail)
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(RuntimeError, match="interrupted while steering"):
+        run_steering.main()
+    assert all(not layer._forward_hooks for layer in loaded_models[0].model.layers)
+    prefix = (output / "answers.jsonl").read_bytes()
+    assert len(prefix.splitlines()) == 3 and not (output / "summary.json").exists()
+    monkeypatch.setattr(run_steering, "generate_batch", original_generate)
+    monkeypatch.setattr(sys, "argv", [*args, "--resume"])
+    run_steering.main()
+    assert (output / "answers.jsonl").read_bytes().startswith(prefix)
+    assert len((output / "answers.jsonl").read_bytes().splitlines()) == 15
+
+
+def test_resume_rejects_changed_settings_or_truncated_cache(tmp_path, prepared, monkeypatch):
+    output = tmp_path / "sweep"
+    args = ["run_steering", *prepared, "--output", str(output), "--limit", "1"]
+    monkeypatch.setattr(sys, "argv", args)
+    run_steering.main()
+    expected = (output / "answers.jsonl").read_bytes()
+    def unexpected_generation(*args, **kwargs):
+        pytest.fail("Invalid resume must not generate answers.")
+    monkeypatch.setattr(run_steering, "generate_batch", unexpected_generation)
+    monkeypatch.setattr(sys, "argv", [*args, "--max-new-tokens", "3", "--resume"])
+    with pytest.raises(ValueError, match="Cannot resume"):
+        run_steering.main()
+    assert (output / "answers.jsonl").read_bytes() == expected
+    (output / "answers.jsonl").write_bytes(expected[:-1])
+    monkeypatch.setattr(sys, "argv", [*args, "--resume"])
+    with pytest.raises(ValueError, match="without a newline"):
+        run_steering.main()
+    assert (output / "answers.jsonl").read_bytes() == expected[:-1]
 
 
 @pytest.fixture

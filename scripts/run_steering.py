@@ -18,6 +18,7 @@ import yaml
 from src.config import load_config
 from src.data import build_eval_jobs, load_persona_data
 from src.generation import generate_batch
+from src.judge import read_jsonl
 from src.model import load_model_and_tokenizer
 from src.steering import load_vectors, steer_response
 
@@ -49,6 +50,36 @@ def condition_jobs(jobs: list[dict], condition: dict) -> list[dict]:
              "steering_positions": "response"} for job in jobs]
 
 
+def load_cached_answers(path: Path, jobs: list[dict], *, jobs_per_condition: int,
+                        batch_size: int, seed: int) -> list[dict]:
+    """Validate a saved prefix; malformed or incompatible data is never repaired."""
+    if not path.exists():
+        return []
+    raw = path.read_bytes()
+    if raw and not raw.endswith(b"\n"):
+        raise ValueError("answers.jsonl ends without a newline; inspect the interrupted write before resuming.")
+    rows = read_jsonl(path)
+    if len(rows) > len(jobs):
+        raise ValueError("More cached answers than expected jobs.")
+    for i, (row, job) in enumerate(zip(rows, jobs)):
+        local_index = i % jobs_per_condition
+        batch_index = local_index // batch_size
+        start = i - local_index + batch_index * batch_size
+        end = min(start + batch_size, i - local_index + jobs_per_condition)
+        if (any(row.get(k) != v for k, v in job.items())
+                or row.get("batch_seed") != (seed + batch_index) % 2**32
+                or row.get("batch_job_ids") != [r["id"] for r in jobs[start:end]]):
+            raise ValueError("Cached answers do not match the ordered jobs, batches or seeds.")
+        tokens = row.get("generated_token_ids")
+        if (not isinstance(row.get("answer"), str) or not isinstance(row.get("prompt"), str)
+                or not isinstance(tokens, list) or not tokens
+                or any(type(token) is not int or token < 0 for token in tokens)
+                or row.get("generated_tokens") != len(tokens)
+                or row.get("finish_reason") not in ("eos", "length")):
+            raise ValueError("Malformed cached generation record.")
+    return rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("configs/qwen25_15b.yaml"))
@@ -58,6 +89,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True, help="New sweep directory")
     parser.add_argument("--limit", type=int, help="First N dev jobs per condition, for smoke runs")
     parser.add_argument("--max-new-tokens", type=int)
+    parser.add_argument("--resume", action="store_true", help="Continue this exact sweep directory")
     args = parser.parse_args()
     if any(value is not None and value < 1 for value in (args.limit, args.max_new_tokens)):
         parser.error("limit and max-new-tokens must be positive.")
@@ -74,8 +106,17 @@ def main() -> None:
         base_jobs = base_jobs[:args.limit]
     jobs = [job for condition in conditions for job in condition_jobs(base_jobs, condition)]
     raw_jobs = "".join(json.dumps(job, ensure_ascii=False) + "\n" for job in jobs).encode("utf-8")
-    args.output.mkdir(parents=True, exist_ok=False)
-    (args.output / "jobs.jsonl").write_bytes(raw_jobs)
+    if args.resume:
+        previous = json.loads((args.output / "manifest.json").read_text(encoding="utf-8"))
+        if (args.output / "jobs.jsonl").read_bytes() != raw_jobs:
+            raise ValueError("Cannot resume: prepared jobs changed.")
+    else:
+        args.output.mkdir(parents=True, exist_ok=False)
+        (args.output / "jobs.jsonl").write_bytes(raw_jobs)
+    batch_size = config["run"]["batch_size"]
+    cached = load_cached_answers(args.output / "answers.jsonl", jobs,
+                                 jobs_per_condition=len(base_jobs), batch_size=batch_size,
+                                 seed=config["run"]["seed"]) if args.resume else []
     model, tokenizer = load_model_and_tokenizer(config["model"])
     if (model.config.model_type != "qwen2" or list(bundle["vectors"].shape)
             != [model.config.num_hidden_layers, model.config.hidden_size]):
@@ -106,32 +147,48 @@ def main() -> None:
             "scripts/run_steering.py", "src/steering.py", "src/generation.py",
             "src/config.py", "src/model.py", "src/data.py")},
     }
-    (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Generating {len(jobs)} answers across {len(conditions)} conditions", flush=True)
+    if args.resume:
+        for key, value in manifest.items():
+            if key != "started_at" and previous.get(key) != value:
+                raise ValueError(f"Cannot resume: manifest field {key} changed.")
+    else:
+        (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"Answers: {len(jobs)}; cached: {len(cached)}; pending: {len(jobs) - len(cached)}", flush=True)
     started = perf_counter()
-    batch_size = config["run"]["batch_size"]
+    all_rows = list(cached)
     totals = []
-    with (args.output / "answers.jsonl").open("x", encoding="utf-8", newline="\n") as stream:
-        for condition in conditions:
+    mode = "a" if args.resume else "x"
+    with (args.output / "answers.jsonl").open(mode, encoding="utf-8", newline="\n") as stream:
+        for condition_index, condition in enumerate(conditions):
             current_jobs = condition_jobs(base_jobs, condition)
             steering = nullcontext() if condition["layer"] is None else steer_response(
                 model, bundle["vectors"][condition["layer"]],
                 layer=condition["layer"], alpha=condition["alpha"])
-            reasons, n_tokens = Counter(), 0
             with steering:
                 for batch_index, start in enumerate(range(0, len(current_jobs), batch_size)):
                     batch = current_jobs[start:start + batch_size]
+                    offset = condition_index * len(base_jobs) + start
+                    if offset + len(batch) <= len(cached):
+                        continue
                     seed = (config["run"]["seed"] + batch_index) % 2**32
                     rows = generate_batch(model, tokenizer, batch, config["generation"], seed=seed)
-                    stream.write("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+                    saved_prefix = cached[offset:offset + len(batch)]
+                    if rows[:len(saved_prefix)] != saved_prefix:
+                        raise ValueError("Replayed batch differs from its saved prefix; existing data was retained.")
+                    fresh = rows[len(saved_prefix):]
+                    stream.write("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in fresh))
                     stream.flush()
-                    reasons.update(row["finish_reason"] for row in rows)
-                    n_tokens += sum(row["generated_tokens"] for row in rows)
+                    all_rows.extend(fresh)
                     print(f"{condition['id']}: {start + len(rows)}/{len(current_jobs)} saved", flush=True)
+            begin = condition_index * len(base_jobs)
+            completed = all_rows[begin:begin + len(base_jobs)]
+            reasons = Counter(row["finish_reason"] for row in completed)
+            n_tokens = sum(row["generated_tokens"] for row in completed)
             totals.append({**condition, "n_answers": len(current_jobs),
                            "generated_tokens": n_tokens, "finish_reasons": dict(reasons)})
     summary = {"status": "complete", "n_answers": len(jobs), "conditions": totals,
                "generation_seconds": perf_counter() - started,
+               "timing_scope": "current_invocation", "cached_answers": len(cached),
                "finished_at": datetime.now(timezone.utc).isoformat()}
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
