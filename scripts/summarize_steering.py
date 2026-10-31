@@ -1,4 +1,4 @@
-"""Write dev steering metrics by condition after both judge scores are complete."""
+"""Write dev or test steering metrics after both judge scores are complete."""
 
 import argparse
 import csv
@@ -9,14 +9,17 @@ from pathlib import Path
 from src.judge import load_answers, load_scores, read_jsonl
 
 
-def summarize(answers: list[dict], scores: dict, conditions: list[dict], *, trait: str) -> list[dict]:
-    """Compare matching dev samples; keep unscorable scores out of the means."""
+def summarize(answers: list[dict], scores: dict, conditions: list[dict], *,
+              trait: str, split: str = "dev") -> list[dict]:
+    """Compare matching samples of one split; exclude unscorable scores from means."""
+    if split not in ("dev", "test"):
+        raise ValueError("split must be dev or test.")
     groups = {c["id"]: [] for c in conditions}
     specs = {c["id"]: c for c in conditions}
     for row in answers:
         name = row.get("condition")
-        if row.get("split") != "dev" or row.get("trait") != trait or name not in groups:
-            raise ValueError("Expected dev answers from the configured conditions and trait.")
+        if row.get("split") != split or row.get("trait") != trait or name not in groups:
+            raise ValueError(f"Expected {split} answers from the configured conditions and trait.")
         spec = specs[name]
         if row.get("steering_layer") != spec["layer"] or row.get("steering_alpha") != spec["alpha"]:
             raise ValueError("Answer steering metadata differs from its condition.")
@@ -86,7 +89,7 @@ def main() -> None:
         raise ValueError("Judge trait differs from the sweep.")
     scores = load_scores(args.judgments / "judgments.jsonl",
                          answer_ids={r["id"] for r in answers}, metrics={trait, "coherence"})
-    report = summarize(answers, scores, manifest["conditions"], trait=trait)
+    report = summarize(answers, scores, manifest["conditions"], trait=trait, split=manifest["split"])
     with args.output.open("x", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(report[0]))
         writer.writeheader()

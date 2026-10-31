@@ -1,4 +1,4 @@
-"""Generate one shared baseline and a layer/alpha sweep on the fixed dev split."""
+"""Generate one shared baseline and steering conditions on the dev or test split."""
 
 import argparse
 import hashlib
@@ -24,22 +24,40 @@ from src.steering import load_vectors, steer_response
 
 
 def load_conditions(path: str | Path, *, n_layers: int) -> list[dict]:
-    """Expand a strict grid; retain zero only as one shared baseline."""
+    """Load a grid or explicit nonzero layer/alpha pairs; add one shared baseline."""
     config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(config, dict) or set(config) != {"layers", "alphas"}:
-        raise ValueError("Steering config must contain layers and alphas.")
-    layers, alphas = config["layers"], config["alphas"]
-    if (not isinstance(layers, list) or not layers
-            or any(type(k) is not int or not 0 <= k < n_layers for k in layers)
-            or len(set(layers)) != len(layers)):
-        raise ValueError("layers must be unique valid zero-based block indices.")
-    if (not isinstance(alphas, list) or not alphas
-            or any(type(a) not in (int, float) or not math.isfinite(a) for a in alphas)
-            or len(set(alphas)) != len(alphas) or 0 not in alphas):
-        raise ValueError("alphas must be unique finite numbers including zero.")
+    if not isinstance(config, dict):
+        raise ValueError("Steering config must contain layers/alphas or conditions.")
+    if set(config) == {"layers", "alphas"}:
+        layers, alphas = config["layers"], config["alphas"]
+        if (not isinstance(layers, list) or not layers
+                or any(type(k) is not int or not 0 <= k < n_layers for k in layers)
+                or len(set(layers)) != len(layers)):
+            raise ValueError("layers must be unique valid zero-based block indices.")
+        if (not isinstance(alphas, list) or not alphas
+                or any(type(a) not in (int, float) or not math.isfinite(a) for a in alphas)
+                or len(set(alphas)) != len(alphas) or 0 not in alphas):
+            raise ValueError("alphas must be unique finite numbers including zero.")
+        pairs = [{"layer": k, "alpha": a} for k in layers for a in alphas if a != 0]
+    elif set(config) == {"conditions"}:
+        pairs = config["conditions"]
+        if not isinstance(pairs, list) or not pairs:
+            raise ValueError("conditions must be a nonempty list of layer/alpha pairs.")
+        for pair in pairs:
+            if not isinstance(pair, dict) or set(pair) != {"layer", "alpha"}:
+                raise ValueError("Each condition must contain layer and alpha.")
+            layer, alpha = pair["layer"], pair["alpha"]
+            if type(layer) is not int or not 0 <= layer < n_layers:
+                raise ValueError("Condition layer must be a valid zero-based block index.")
+            if type(alpha) not in (int, float) or not math.isfinite(alpha) or alpha == 0:
+                raise ValueError("Condition alpha must be finite and nonzero; baseline is automatic.")
+        if len({(p["layer"], p["alpha"]) for p in pairs}) != len(pairs):
+            raise ValueError("Duplicate steering conditions.")
+    else:
+        raise ValueError("Use either layers/alphas or conditions, without extra keys.")
     return [{"id": "baseline", "layer": None, "alpha": 0.0}] + [
-        {"id": f"layer{k}_alpha{float(a)}", "layer": k, "alpha": float(a)}
-        for k in layers for a in alphas if a != 0
+        {"id": f"layer{p['layer']}_alpha{float(p['alpha'])}",
+         "layer": p["layer"], "alpha": float(p["alpha"])} for p in pairs
     ]
 
 
@@ -85,9 +103,10 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/qwen25_15b.yaml"))
     parser.add_argument("--data-config", type=Path, default=Path("configs/persona_sycophantic.yaml"))
     parser.add_argument("--steering-config", type=Path, default=Path("configs/steering_dev.yaml"))
+    parser.add_argument("--split", choices=("dev", "test"), default="dev")
     parser.add_argument("--vectors", type=Path, required=True, help="Completed extraction directory")
     parser.add_argument("--output", type=Path, required=True, help="New sweep directory")
-    parser.add_argument("--limit", type=int, help="First N dev jobs per condition, for smoke runs")
+    parser.add_argument("--limit", type=int, help="First N jobs per condition, for smoke runs")
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--resume", action="store_true", help="Continue this exact sweep directory")
     args = parser.parse_args()
@@ -101,7 +120,7 @@ def main() -> None:
     data = load_persona_data(args.data_config)
     bundle = load_vectors(args.vectors, model_settings=config["model"], trait=data["config"]["trait"])
     conditions = load_conditions(args.steering_config, n_layers=bundle["vectors"].shape[0])
-    base_jobs = build_eval_jobs(data, split="dev")
+    base_jobs = build_eval_jobs(data, split=args.split)
     if args.limit is not None:
         base_jobs = base_jobs[:args.limit]
     jobs = [job for condition in conditions for job in condition_jobs(base_jobs, condition)]
@@ -124,7 +143,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(), "config": config,
-        "data_config": data["config"], "conditions": conditions, "split": "dev",
+        "data_config": data["config"], "conditions": conditions, "split": args.split,
         "n_jobs": len(jobs), "jobs_per_condition": len(base_jobs),
         "jobs_sha256": hashlib.sha256(raw_jobs).hexdigest(),
         "source_config_sha256": {name: hashlib.sha256(path.read_bytes()).hexdigest()

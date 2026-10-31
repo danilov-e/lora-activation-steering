@@ -119,13 +119,31 @@ def test_wide_grid_covers_layer_and_alpha_ranges():
     assert {c["layer"] for c in conditions if c["layer"] is not None} == {0, 4, 8, 12, 14, 16, 20, 24, 27}
 
 
+def test_test_config_has_only_frozen_pairs_and_one_baseline():
+    conditions = load_conditions(ROOT / "configs/steering_test.yaml", n_layers=28)
+    assert conditions == [
+        {"id": "baseline", "layer": None, "alpha": 0.0},
+        {"id": "layer13_alpha0.75", "layer": 13, "alpha": 0.75},
+        {"id": "layer12_alpha1.0", "layer": 12, "alpha": 1.0},
+    ]
+
+
 @pytest.mark.parametrize("config", [
     {"layers": [True], "alphas": [0, 1]},
     {"layers": [2], "alphas": [0, 1]},
     {"layers": [0], "alphas": [0, float("nan")]},
     {"layers": [0], "alphas": [1]},
+    {"conditions": []},
+    {"conditions": [{"layer": True, "alpha": 1}]},
+    {"conditions": [{"layer": 2, "alpha": 1}]},
+    {"conditions": [{"layer": 0, "alpha": 0}]},
+    {"conditions": [{"layer": 0, "alpha": float("nan")}]},
+    {"conditions": [{"layer": 0, "alpha": True}]},
+    {"conditions": [{"layer": 0, "alpha": 1}, {"layer": 0, "alpha": 1.0}]},
+    {"conditions": [{"layer": 0, "alpha": 1, "extra": 2}]},
+    {"conditions": [{"layer": 0, "alpha": 1}], "layers": [0], "alphas": [0, 1]},
 ])
-def test_invalid_grid_rejected(tmp_path, config):
+def test_invalid_conditions_rejected(tmp_path, config):
     path = tmp_path / "grid.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
     with pytest.raises(ValueError):
@@ -151,20 +169,31 @@ def prepared(tmp_path, tiny_pair):
             "--steering-config", str(grid), "--data-config", str(ROOT / "configs/persona_sycophantic.yaml")]
 
 
-def test_real_cli_matches_baseline_resets_seeds_and_writes_complete_sweep(tmp_path, prepared):
+@pytest.mark.parametrize("split, explicit", [("dev", False), ("test", True)])
+def test_real_cli_matches_baseline_resets_seeds_and_writes_complete_sweep(tmp_path, prepared, split, explicit):
+    if explicit:
+        grid = Path(prepared[prepared.index("--steering-config") + 1])
+        grid.write_text(yaml.safe_dump({"conditions": [
+            {"layer": 1, "alpha": 0.75}, {"layer": 0, "alpha": 1.0},
+        ]}), encoding="utf-8")
+    n_conditions = 3 if explicit else 5
+    n_answers = 3 * n_conditions
     output = tmp_path / "sweep"
     command = [sys.executable, "-m", "scripts.run_steering", *prepared,
-               "--output", str(output), "--limit", "3", "--max-new-tokens", "3"]
+               "--output", str(output), "--split", split, "--limit", "3", "--max-new-tokens", "3"]
     completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     rows = [json.loads(line) for line in (output / "answers.jsonl").read_text().splitlines()]
     manifest = json.loads((output / "manifest.json").read_text())
     summary = json.loads((output / "summary.json").read_text())
     jobs = [json.loads(line) for line in (output / "jobs.jsonl").read_text().splitlines()]
-    assert summary["status"] == "complete" and summary["n_answers"] == 15
-    assert manifest["split"] == "dev" and len({r["id"] for r in rows}) == 15
-    assert all(r["split"] == "dev" and r["system"] is None for r in rows)
-    for start in range(0, 15, 3):
+    assert summary["status"] == "complete" and summary["n_answers"] == n_answers
+    assert manifest["split"] == split and len({r["id"] for r in rows}) == n_answers
+    assert len(manifest["conditions"]) == n_conditions
+    assert all(r["split"] == split and r["system"] is None for r in rows)
+    expected_questions = [4, 4, 5] if split == "dev" else [0, 0, 1]
+    for start in range(0, n_answers, 3):
+        assert [r["question_id"] for r in rows[start:start + 3]] == expected_questions
         assert [r["batch_seed"] for r in rows[start:start + 3]] == [42, 42, 43]
         assert [r["evaluation_job_id"] for r in rows[start:start + 3]] == [
             r["evaluation_job_id"] for r in rows[:3]]
@@ -193,10 +222,10 @@ def test_existing_output_rejected_before_model_loading(tmp_path, prepared, monke
         run_steering.main()
 
 
-@pytest.mark.parametrize("saved_rows", [2, 4])
-def test_resume_matches_uninterrupted_sweep_and_skips_cached_batches(tmp_path, prepared, monkeypatch, saved_rows):
+@pytest.mark.parametrize("split, saved_rows", [("dev", 2), ("test", 4)])
+def test_resume_matches_uninterrupted_sweep_and_skips_cached_batches(tmp_path, prepared, monkeypatch, split, saved_rows):
     reference, resumed = tmp_path / "reference", tmp_path / "resumed"
-    args = ["run_steering", *prepared, "--limit", "3"]
+    args = ["run_steering", *prepared, "--split", split, "--limit", "3"]
     monkeypatch.setattr(sys, "argv", [*args, "--output", str(reference)])
     run_steering.main()
     expected = (reference / "answers.jsonl").read_bytes()
@@ -269,6 +298,10 @@ def test_resume_rejects_changed_settings_or_truncated_cache(tmp_path, prepared, 
     with pytest.raises(ValueError, match="Cannot resume"):
         run_steering.main()
     assert (output / "answers.jsonl").read_bytes() == expected
+    monkeypatch.setattr(sys, "argv", [*args, "--split", "test", "--resume"])
+    with pytest.raises(ValueError, match="Cannot resume"):
+        run_steering.main()
+    assert (output / "answers.jsonl").read_bytes() == expected
     (output / "answers.jsonl").write_bytes(expected[:-1])
     monkeypatch.setattr(sys, "argv", [*args, "--resume"])
     with pytest.raises(ValueError, match="without a newline"):
@@ -312,8 +345,22 @@ def test_metrics_reject_mismatched_samples(judged_answers):
         summarize(answers, scores, conditions, trait="sycophantic")
 
 
-def test_real_metrics_cli_writes_csv(tmp_path, judged_answers):
+@pytest.mark.parametrize("split", ["dev", "test"])
+def test_metrics_reject_mixed_splits(judged_answers, split):
     answers, scores, conditions = judged_answers
+    for row in answers:
+        row["split"] = split
+    assert len(summarize(answers, scores, conditions, trait="sycophantic", split=split)) == 2
+    answers[-1]["split"] = "test" if split == "dev" else "dev"
+    with pytest.raises(ValueError, match=f"Expected {split} answers"):
+        summarize(answers, scores, conditions, trait="sycophantic", split=split)
+
+
+@pytest.mark.parametrize("split", ["dev", "test"])
+def test_real_metrics_cli_writes_csv(tmp_path, judged_answers, split):
+    answers, scores, conditions = judged_answers
+    for row in answers:
+        row["split"] = split
     run, judge = tmp_path / "run", tmp_path / "judge"
     run.mkdir()
     judge.mkdir()
@@ -321,7 +368,8 @@ def test_real_metrics_cli_writes_csv(tmp_path, judged_answers):
     (run / "answers.jsonl").write_bytes(raw)
     (run / "jobs.jsonl").write_bytes(raw)
     (run / "manifest.json").write_text(json.dumps({
-        "conditions": conditions, "n_jobs": 4, "data_config": {"trait": "sycophantic"},
+        "conditions": conditions, "n_jobs": 4, "split": split,
+        "data_config": {"trait": "sycophantic"},
         "jobs_sha256": hashlib.sha256(raw).hexdigest()}), encoding="utf-8")
     (run / "summary.json").write_text('{"status": "complete"}', encoding="utf-8")
     (judge / "manifest.json").write_text(json.dumps({"spec": {
