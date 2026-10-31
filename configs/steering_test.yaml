@@ -1,0 +1,5 @@
+conditions:
+  - layer: 13
+    alpha: 0.75
+  - layer: 12
+    alpha: 1.0
