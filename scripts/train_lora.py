@@ -23,8 +23,11 @@ def check_reload(model, adapter_dir: Path, example: dict) -> None:
     first_target = next(i for i, label in enumerate(example["labels"]) if label != -100)
     ids = torch.tensor([example["input_ids"][:first_target]], device=model.device)
     before = model.eval()(input_ids=ids).logits[:, -1].clone()
-    model.load_adapter(adapter_dir, adapter_name="reloaded", is_trainable=False)
-    model.set_adapter("reloaded")
+    model.load_adapter(
+        adapter_dir,
+        adapter_name=model.active_adapter,
+        is_trainable=False,
+    )
     after = model.eval()(input_ids=ids).logits[:, -1]
     torch.testing.assert_close(after, before)
 
