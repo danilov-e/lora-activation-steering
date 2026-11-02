@@ -15,6 +15,7 @@ from time import perf_counter
 import torch
 import yaml
 
+from src.adapters import load_training_adapter
 from src.config import load_config
 from src.data import build_eval_jobs, load_persona_data
 from src.generation import generate_batch
@@ -106,6 +107,7 @@ def main() -> None:
     parser.add_argument("--split", choices=("dev", "test"), default="dev")
     parser.add_argument("--vectors", type=Path, required=True, help="Completed extraction directory")
     parser.add_argument("--output", type=Path, required=True, help="New sweep directory")
+    parser.add_argument("--adapter", type=Path, help="Completed full train_lora output directory")
     parser.add_argument("--limit", type=int, help="First N jobs per condition, for smoke runs")
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--resume", action="store_true", help="Continue this exact sweep directory")
@@ -137,6 +139,9 @@ def main() -> None:
                                  jobs_per_condition=len(base_jobs), batch_size=batch_size,
                                  seed=config["run"]["seed"]) if args.resume else []
     model, tokenizer = load_model_and_tokenizer(config["model"])
+    adapter_info = None
+    if args.adapter is not None:
+        model, adapter_info = load_training_adapter(model, args.adapter, model_settings=config["model"])
     if (model.config.model_type != "qwen2" or list(bundle["vectors"].shape)
             != [model.config.num_hidden_layers, model.config.hidden_size]):
         raise ValueError("Vector dimensions or architecture do not match the model.")
@@ -164,9 +169,14 @@ def main() -> None:
         },
         "code_sha256": {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in (
             "scripts/run_steering.py", "src/steering.py", "src/generation.py",
-            "src/config.py", "src/model.py", "src/data.py")},
+            "src/config.py", "src/model.py", "src/data.py", "src/adapters.py")},
     }
+    if adapter_info is not None:
+        manifest["adapter"] = adapter_info
+        manifest["environment"]["packages"]["peft"] = importlib.metadata.version("peft")
     if args.resume:
+        if previous.get("adapter") != adapter_info:
+            raise ValueError("Cannot resume: adapter changed.")
         for key, value in manifest.items():
             if key != "started_at" and previous.get(key) != value:
                 raise ValueError(f"Cannot resume: manifest field {key} changed.")
