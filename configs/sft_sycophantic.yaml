@@ -1,0 +1,13 @@
+trait: sycophantic
+persona_config: persona_sycophantic.yaml
+source:
+  repository: https://github.com/safety-research/persona_vectors
+  revision: b8e0f044fe2410a6fad579f38324f03f13b4e917
+  archive_sha256: 6913afdd712997599016444e789d2a4a5e383b6418e6596a4598cebdb97e943e
+  member: dataset/sycophancy/normal.jsonl
+  member_sha256: 6df3de0de5c73a73d2f3bc6c3068a1d6eaf1cd97961333b8f0c86e2c5366b399
+split:
+  seed: 42
+  validation_fraction: 0.1
+  train_size: 512
+  validation_size: 64
