@@ -14,6 +14,7 @@ from time import perf_counter
 import torch
 import yaml
 
+from src.adapters import load_training_adapter
 from src.config import load_config
 from src.generation import generate_batch
 from src.model import load_model_and_tokenizer
@@ -47,7 +48,7 @@ def write_json(path: Path, value: dict) -> None:
 
 def code_info() -> dict:
     root = Path(__file__).resolve().parents[1]
-    paths = ("scripts/run_generation.py", "src/config.py", "src/model.py", "src/generation.py")
+    paths = ("scripts/run_generation.py", "src/config.py", "src/model.py", "src/generation.py", "src/adapters.py")
     info = {"sha256": {
         path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths
     }, "git_commit": None, "git_dirty": None}
@@ -70,6 +71,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/qwen25_15b.yaml"))
     parser.add_argument("--jobs", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="New run directory")
+    parser.add_argument("--adapter", type=Path, help="Completed full train_lora output directory")
     parser.add_argument("--limit", type=int, help="Use only the first N jobs")
     parser.add_argument("--max-new-tokens", type=int, help="Override the config token limit")
     args = parser.parse_args()
@@ -98,6 +100,9 @@ def main() -> None:
     (args.output / "jobs.jsonl").write_bytes(selected_raw)
     (args.output / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     model, tokenizer = load_model_and_tokenizer(config["model"])
+    adapter_info = None
+    if args.adapter is not None:
+        model, adapter_info = load_training_adapter(model, args.adapter, model_settings=config["model"])
     batch_size = config["run"]["batch_size"]
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -124,6 +129,9 @@ def main() -> None:
         "chat_template": tokenizer.chat_template,
         "model_generation_config": model.generation_config.to_dict(),
     }
+    if adapter_info is not None:
+        manifest["adapter"] = adapter_info
+        manifest["environment"]["packages"]["peft"] = importlib.metadata.version("peft")
     write_json(args.output / "manifest.json", manifest)
     print(f"Generating {len(jobs)} jobs on {model.device}, {model.dtype}; batch_size={batch_size}", flush=True)
     started = perf_counter()

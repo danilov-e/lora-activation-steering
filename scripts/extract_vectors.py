@@ -11,6 +11,7 @@ from time import perf_counter
 
 import torch
 
+from src.adapters import load_training_adapter
 from src.config import load_config
 from src.extraction import extract_vector, validate_pairs
 from src.judge import load_answers
@@ -23,6 +24,7 @@ def main() -> None:
     parser.add_argument("--generation-run", type=Path, required=True)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="New vector directory")
+    parser.add_argument("--adapter", type=Path, help="Same full training directory used for generation")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--limit-pairs", type=int, help="Extract only the first N complete pairs")
     args = parser.parse_args()
@@ -44,6 +46,8 @@ def main() -> None:
     for key in ("id", "revision"):
         if config["model"][key] != generation["config"]["model"][key]:
             raise ValueError(f"Model {key} differs from the generation run.")
+    if (args.adapter is not None) != (generation.get("adapter") is not None):
+        raise ValueError("Generation and extraction must use the same adapter or both use the base model.")
     original = {row["id"]: row for row in load_answers(source_paths["answers"])}
     rows = load_answers(source_paths["selected_answers"])
     pair_ids = validate_pairs(rows)
@@ -56,6 +60,11 @@ def main() -> None:
         rows = [row for row in rows if row["pair_id"] in wanted]
     args.output.mkdir(parents=True, exist_ok=False)
     model, tokenizer = load_model_and_tokenizer(config["model"])
+    adapter_info = None
+    if args.adapter is not None:
+        model, adapter_info = load_training_adapter(model, args.adapter, model_settings=config["model"])
+        if adapter_info != generation["adapter"]:
+            raise ValueError("Extraction adapter differs from the generation adapter.")
     if tokenizer.chat_template != generation["chat_template"]:
         raise ValueError("Chat template differs from the generation run.")
     root = Path(__file__).resolve().parents[1]
@@ -80,13 +89,18 @@ def main() -> None:
         },
         "code_sha256": {path: hashlib.sha256((root / path).read_bytes()).hexdigest()
                         for path in ("src/extraction.py", "scripts/extract_vectors.py",
-                                     "src/config.py", "src/model.py", "src/judge.py")},
+                                     "src/config.py", "src/model.py", "src/judge.py", "src/adapters.py")},
     }
+    if adapter_info is not None:
+        manifest["adapter"] = adapter_info
+        manifest["environment"]["packages"]["peft"] = importlib.metadata.version("peft")
     (args.output / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     started = perf_counter()
     result = extract_vector(model, tokenizer, rows, batch_size=args.batch_size)
     result["model"] = config["model"]
+    if adapter_info is not None:
+        result["adapter"] = adapter_info
     torch.save(result, args.output / "vectors.pt")
     summary = {
         "status": "complete", "n_pairs": result["n_pairs"],

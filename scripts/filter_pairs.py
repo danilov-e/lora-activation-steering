@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from src.filtering import filter_pairs, pair_summary
+from src.filtering import filter_pairs, pair_summary, retain_reference_pairs
 from src.judge import load_answers, load_scores
 
 
@@ -14,6 +14,8 @@ def main() -> None:
     parser.add_argument("--answers", type=Path, required=True)
     parser.add_argument("--judgments", type=Path, required=True, help="Judge output directory")
     parser.add_argument("--output", type=Path, required=True, help="New selection directory")
+    parser.add_argument("--reference-selection", type=Path,
+                        help="Retain only pairs also kept in this verified selection")
     args = parser.parse_args()
     manifest_path = args.judgments / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -27,7 +29,24 @@ def main() -> None:
     scores = load_scores(scores_path, answer_ids={r["id"] for r in answers},
                          metrics={spec["trait"], "coherence"})
     reports, selected = filter_pairs(answers, scores, trait=spec["trait"])
+    reference_sources = None
+    if args.reference_selection is not None:
+        reference_path = args.reference_selection / "selected_answers.jsonl"
+        reference_summary_path = args.reference_selection / "summary.json"
+        reference = load_answers(reference_path)
+        reference_summary = json.loads(reference_summary_path.read_text(encoding="utf-8"))
+        if (len(reference) != reference_summary["selected_answers"]
+                or len(reference) != 2 * reference_summary["kept_pairs"]
+                or reference_summary["thresholds"] != pair_summary(reports)["thresholds"]):
+            raise ValueError("Reference selection counts or thresholds differ.")
+        reports, selected = retain_reference_pairs(reports, selected, reference)
+        reference_sources = {
+            "selected_answers_sha256": hashlib.sha256(reference_path.read_bytes()).hexdigest(),
+            "summary_sha256": hashlib.sha256(reference_summary_path.read_bytes()).hexdigest(),
+        }
     summary = pair_summary(reports)
+    if reference_sources is not None:
+        summary["reference_selection"] = reference_sources
     root = Path(__file__).resolve().parents[1]
     summary["sources"] = {
         "answers_sha256": spec["answers_sha256"],

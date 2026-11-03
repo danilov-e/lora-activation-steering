@@ -67,3 +67,35 @@ def pair_summary(reports: list[dict]) -> dict:
         "failed_checks": dict(Counter(check for r in reports for check in r["failed_checks"])),
         "thresholds": {"pos_trait_min": 50, "neg_trait_exclusive_max": 50, "coherence_min": 50},
     }
+
+
+def retain_reference_pairs(reports: list[dict], selected: list[dict], reference: list[dict]) -> tuple:
+    """Intersect two author-filtered selections, checking that shared prompts match.
+
+    Only pair membership changes. Both polarities and the current answer order are
+    preserved. The report retains the author decision separately from intersection.
+    """
+    from src.extraction import validate_pairs
+
+    reference_pairs = set(validate_pairs(reference))
+    if selected:
+        validate_pairs(selected)
+    reference_rows = {row["id"]: row for row in reference}
+    shared = {r["pair_id"] for r in reports if r["kept"]} & reference_pairs
+    for row in selected:
+        if row["pair_id"] not in shared:
+            continue
+        other = reference_rows.get(row["id"])
+        keys = ("pair_id", "trait", "split", "polarity", "question_id", "instruction_id",
+                "repeat", "question", "system", "prompt", "prompt_token_ids")
+        if other is None or any(row.get(k) != other.get(k) for k in keys):
+            raise ValueError("Shared pairs must have identical IDs, questions and prompts.")
+    matched = []
+    for report in reports:
+        kept = report["kept"] and report["pair_id"] in shared
+        failed = list(report["failed_checks"])
+        if report["kept"] and not kept:
+            failed.append("not_in_reference")
+        matched.append({**report, "author_kept": report["kept"], "kept": kept,
+                        "failed_checks": failed})
+    return matched, [row for row in selected if row["pair_id"] in shared]
