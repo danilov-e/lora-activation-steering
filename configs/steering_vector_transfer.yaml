@@ -1,0 +1,10 @@
+# Artifact paths are relative to --vector-root.
+# All four directions use the original vector's L2 norm at each block.
+norm_reference: original
+vectors:
+  original: vectors_01
+  reextracted: lora_vectors_01/vectors
+  original_common: lora_vectors_01/vectors_base_common
+  reextracted_common: lora_vectors_01/vectors_lora_common
+same_pairs:
+  - [original_common, reextracted_common]

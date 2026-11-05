@@ -23,6 +23,8 @@ def summarize(answers: list[dict], scores: dict, conditions: list[dict], *,
         spec = specs[name]
         if row.get("steering_layer") != spec["layer"] or row.get("steering_alpha") != spec["alpha"]:
             raise ValueError("Answer steering metadata differs from its condition.")
+        if "vector" in spec and row.get("steering_vector") != spec["vector"]:
+            raise ValueError("Answer vector metadata differs from its condition.")
         groups[name].append(row)
     reference = None
     report = []
@@ -42,6 +44,8 @@ def summarize(answers: list[dict], scores: dict, conditions: list[dict], *,
                   "n_answers": len(rows),
                   "mean_tokens": sum(r["generated_tokens"] for r in rows) / len(rows),
                   "length_fraction": sum(r["finish_reason"] == "length" for r in rows) / len(rows)}
+        if "vector" in spec:
+            record["vector"] = spec["vector"]
         for metric in (trait, "coherence"):
             values = []
             for row in rows:

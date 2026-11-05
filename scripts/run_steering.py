@@ -21,7 +21,7 @@ from src.data import build_eval_jobs, load_persona_data
 from src.generation import generate_batch
 from src.judge import read_jsonl
 from src.model import load_model_and_tokenizer
-from src.steering import load_vectors, steer_response
+from src.steering import load_vector_set, load_vectors, steer_response
 
 
 def load_conditions(path: str | Path, *, n_layers: int) -> list[dict]:
@@ -63,10 +63,13 @@ def load_conditions(path: str | Path, *, n_layers: int) -> list[dict]:
 
 
 def condition_jobs(jobs: list[dict], condition: dict) -> list[dict]:
-    return [{**job, "id": f"{job['id']}__{condition['id']}",
+    rows = [{**job, "id": f"{job['id']}__{condition['id']}",
              "evaluation_job_id": job["id"], "condition": condition["id"],
              "steering_layer": condition["layer"], "steering_alpha": condition["alpha"],
              "steering_positions": "response"} for job in jobs]
+    if "vector" in condition:
+        rows = [{**row, "steering_vector": condition["vector"]} for row in rows]
+    return rows
 
 
 def load_cached_answers(path: Path, jobs: list[dict], *, jobs_per_condition: int,
@@ -105,7 +108,10 @@ def main() -> None:
     parser.add_argument("--data-config", type=Path, default=Path("configs/persona_sycophantic.yaml"))
     parser.add_argument("--steering-config", type=Path, default=Path("configs/steering_dev.yaml"))
     parser.add_argument("--split", choices=("dev", "test"), default="dev")
-    parser.add_argument("--vectors", type=Path, required=True, help="Completed extraction directory")
+    vector_source = parser.add_mutually_exclusive_group(required=True)
+    vector_source.add_argument("--vectors", type=Path, help="One completed extraction directory")
+    vector_source.add_argument("--vector-config", type=Path, help="Named vector artifacts and norm reference")
+    parser.add_argument("--vector-root", type=Path, help="Artifact root for --vector-config paths")
     parser.add_argument("--output", type=Path, required=True, help="New sweep directory")
     parser.add_argument("--adapter", type=Path, help="Completed full train_lora output directory")
     parser.add_argument("--limit", type=int, help="First N jobs per condition, for smoke runs")
@@ -114,14 +120,30 @@ def main() -> None:
     args = parser.parse_args()
     if any(value is not None and value < 1 for value in (args.limit, args.max_new_tokens)):
         parser.error("limit and max-new-tokens must be positive.")
+    if args.vector_root is not None and args.vector_config is None:
+        parser.error("--vector-root requires --vector-config.")
     config = load_config(args.config)
     if args.max_new_tokens is not None:
         config["generation"]["max_new_tokens"] = args.max_new_tokens
     if config["generation"]["min_new_tokens"] > config["generation"]["max_new_tokens"]:
         parser.error("max-new-tokens must be >= min_new_tokens.")
     data = load_persona_data(args.data_config)
-    bundle = load_vectors(args.vectors, model_settings=config["model"], trait=data["config"]["trait"])
+    vector_set = None
+    if args.vector_config is not None:
+        vector_set = load_vector_set(args.vector_config, root=args.vector_root,
+                                     model_settings=config["model"], trait=data["config"]["trait"])
+        bundle = vector_set["reference_bundle"]
+        vector_values = vector_set["vectors"]
+    else:
+        bundle = load_vectors(args.vectors, model_settings=config["model"], trait=data["config"]["trait"])
+        vector_values = {"default": bundle["vectors"]}
     conditions = load_conditions(args.steering_config, n_layers=bundle["vectors"].shape[0])
+    if vector_set is not None:
+        baseline, nonzero = conditions[0], conditions[1:]
+        conditions = [{**baseline, "vector": None}] + [
+            {**condition, "id": f"{name}__{condition['id']}", "vector": name}
+            for name in vector_values for condition in nonzero
+        ]
     base_jobs = build_eval_jobs(data, split=args.split)
     if args.limit is not None:
         base_jobs = base_jobs[:args.limit]
@@ -171,6 +193,14 @@ def main() -> None:
             "scripts/run_steering.py", "src/steering.py", "src/generation.py",
             "src/config.py", "src/model.py", "src/data.py", "src/adapters.py")},
     }
+    if vector_set is not None:
+        manifest.pop("vectors_sha256")
+        manifest.pop("vector_n_pairs")
+        manifest["normalized"] = True
+        manifest["vector_set"] = vector_set["manifest"]
+        manifest["source_config_sha256"]["vectors"] = hashlib.sha256(args.vector_config.read_bytes()).hexdigest()
+    elif bundle.get("adapter") is not None:
+        manifest["vector_adapter"] = bundle["adapter"]
     if adapter_info is not None:
         manifest["adapter"] = adapter_info
         manifest["environment"]["packages"]["peft"] = importlib.metadata.version("peft")
@@ -191,7 +221,7 @@ def main() -> None:
         for condition_index, condition in enumerate(conditions):
             current_jobs = condition_jobs(base_jobs, condition)
             steering = nullcontext() if condition["layer"] is None else steer_response(
-                model, bundle["vectors"][condition["layer"]],
+                model, vector_values[condition.get("vector", "default")][condition["layer"]],
                 layer=condition["layer"], alpha=condition["alpha"])
             with steering:
                 for batch_index, start in enumerate(range(0, len(current_jobs), batch_size)):
