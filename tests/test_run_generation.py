@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from scripts import run_generation
+from src.records import load_prepared_jobs
 from test_core import tiny_pair
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,11 @@ def prepared_run(tmp_path, tiny_pair):
          "system": "instruction" if i % 2 == 0 else None, "pair_id": f"pair{i // 2}"}
         for i in range(4)
     ]
+    jobs[1] = {"id": "j1", "group_id": "scenario-1", "pair_id": "pair0", "messages": [
+        {"role": "user", "content": "short"},
+        {"role": "assistant", "content": "instruction"},
+        {"role": "user", "content": "a long question"},
+    ]}
     jobs_path = tmp_path / "jobs.jsonl"
     raw = "".join(json.dumps(j) + "\n" for j in jobs).encode()
     jobs_path.write_bytes(raw)
@@ -54,6 +60,7 @@ def test_real_cli_batches_metadata_and_reproducibility(tmp_path, prepared_run):
         for job, row in zip(jobs, answers):
             assert all(row[key] == value for key, value in job.items())
             assert "prompt" in row and row["generated_tokens"] == len(row["generated_token_ids"])
+        assert answers[1]["prompt"] == "user short assistant instruction user a long question assistant"
         assert [r["batch_seed"] for r in answers] == [42, 42, 43]
         assert answers[-1]["batch_job_ids"] == ["j2"]
         manifest = json.loads((output / "manifest.json").read_text())
@@ -95,7 +102,7 @@ def test_duplicate_ids_across_batches_rejected(tmp_path):
     jobs = [{"id": name, "question": "short"} for name in ("a", "b", "a")]
     path.write_text("\n".join(json.dumps(job) for job in jobs), encoding="utf-8")
     with pytest.raises(ValueError, match="Duplicate job ids"):
-        run_generation.load_jobs(path)
+        load_prepared_jobs(path)
 
 
 def test_changed_input_rejected_before_output_creation(tmp_path, prepared_run, monkeypatch):

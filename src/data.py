@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from src.records import user_messages
+
 
 def _keys(value, expected: set[str], name: str) -> None:
     if not isinstance(value, dict) or set(value) != expected:
@@ -114,16 +116,19 @@ def build_extraction_jobs(data: dict) -> list[dict]:
     }
     jobs = []
     for question_id, question in enumerate(data["extract"]["questions"]):
+        group_id = f"persona_vectors:{trait}:extract:{question_id}"
         for instruction_id, pair in enumerate(data["extract"]["instruction"]):
             for repeat in range(config["repeats"]["extract"]):
                 pair_id = f"{trait}_extract_q{question_id}_i{instruction_id}_r{repeat}"
                 for polarity in ("pos", "neg"):
+                    system = f"{prefixes[polarity]} {pair[polarity]}"
                     jobs.append({
                         "id": f"{pair_id}_{polarity}", "pair_id": pair_id,
+                        "group_id": group_id, "messages": user_messages(question, system),
                         "trait": trait, "split": "extract",
                         "question_id": question_id, "instruction_id": instruction_id,
                         "repeat": repeat, "polarity": polarity, "question": question,
-                        "system": f"{prefixes[polarity]} {pair[polarity]}",
+                        "system": system,
                     })
     return jobs
 
@@ -137,6 +142,8 @@ def build_eval_jobs(data: dict, *, split: str) -> list[dict]:
     return [
         {
             "id": f"{trait}_{split}_q{question_id}_r{repeat}",
+            "group_id": f"persona_vectors:{trait}:eval:{question_id}",
+            "messages": user_messages(data["eval"]["questions"][question_id]),
             "trait": trait, "split": split, "question_id": question_id,
             "repeat": repeat, "question": data["eval"]["questions"][question_id],
             "system": None,

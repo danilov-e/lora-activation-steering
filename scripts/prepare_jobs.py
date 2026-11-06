@@ -22,6 +22,7 @@ def main() -> None:
     content = "".join(json.dumps(job, ensure_ascii=False) + "\n" for job in jobs)
     raw = content.encode("utf-8")
     manifest = {
+        "schema_version": 1,
         "data_config": data["config"], "split": args.split,
         "n_jobs": len(jobs), "jobs_sha256": hashlib.sha256(raw).hexdigest(),
     }

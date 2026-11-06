@@ -3,19 +3,23 @@
 import torch
 from transformers import set_seed
 
+from src.records import generation_messages, user_messages
+
+
+def _render_chat_prompt(tokenizer, messages: list[dict]) -> str:
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
 
 def format_prompt(tokenizer, question: str, system: str | None = None) -> str:
-    """None delegates the default system instruction to the model's template."""
-    messages = [] if system is None else [{"role": "system", "content": system}]
-    messages.append({"role": "user", "content": question})
-    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    """Render a single-turn prompt, delegating the default system text to the template."""
+    return _render_chat_prompt(tokenizer, user_messages(question, system))
 
 
 @torch.inference_mode()
 def generate_batch(model, tokenizer, jobs: list[dict], settings: dict, *, seed: int) -> list[dict]:
     """Return one record per job, including the exact prompt and sampled tokens.
 
-    Each job has a unique string id, question and optional system instruction.
+    Chat jobs carry messages, a unique id and a question group id.
     Reproducibility assumes the same model, settings, batch and environment.
     The seed resets the process RNGs via transformers.set_seed.
     """
@@ -23,17 +27,7 @@ def generate_batch(model, tokenizer, jobs: list[dict], settings: dict, *, seed: 
         return []
     if model.training or tokenizer.padding_side != "left":
         raise ValueError("Generation requires model.eval() and left padding.")
-    for job in jobs:
-        if not isinstance(job.get("id"), str) or not job["id"]:
-            raise ValueError("Every job needs a nonempty string id.")
-        if not isinstance(job.get("question"), str) or not job["question"].strip():
-            raise ValueError("Every job needs a nonempty question.")
-        if job.get("system") is not None and not isinstance(job["system"], str):
-            raise ValueError("system must be a string or None.")
-    if len({job["id"] for job in jobs}) != len(jobs):
-        raise ValueError("Duplicate job ids in batch.")
-
-    prompts = [format_prompt(tokenizer, job["question"], job.get("system")) for job in jobs]
+    prompts = [_render_chat_prompt(tokenizer, messages) for messages in generation_messages(jobs)]
     inputs = tokenizer(prompts, padding=True, add_special_tokens=False, return_tensors="pt").to(model.device)
     # Every generated sequence starts after the SAME padded input width.
     prompt_width = inputs.input_ids.shape[1]

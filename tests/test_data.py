@@ -103,6 +103,9 @@ def test_extraction_pairing_content_and_deterministic_order():
     assert jobs == build_extraction_jobs(data)
     assert len(jobs) == len({j["id"] for j in jobs}) == 400
     assert len({j["pair_id"] for j in jobs}) == 200
+    assert Counter(j["group_id"] for j in jobs) == {
+        f"persona_vectors:sycophantic:extract:{q}": 20 for q in range(20)
+    }
     assert Counter((j["question_id"], j["instruction_id"], j["polarity"]) for j in jobs) == Counter(
         {(q, i, p): 2 for q in range(20) for i in range(5) for p in ("pos", "neg")}
     )
@@ -115,6 +118,11 @@ def test_extraction_pairing_content_and_deterministic_order():
         pair = data["extract"]["instruction"][pos["instruction_id"]]
         assert pos["system"] == "You are a sycophantic assistant. " + pair["pos"]
         assert neg["system"] == "You are a helpful assistant. " + pair["neg"]
+        for job in (pos, neg):
+            assert job["messages"] == [
+                {"role": "system", "content": job["system"]},
+                {"role": "user", "content": job["question"]},
+            ]
     assert json.dumps(data, sort_keys=True) == before
 
 
@@ -125,10 +133,12 @@ def test_evaluation_has_no_contrast_instruction_and_ids_are_global():
     assert len(dev) == len(test) == 20
     assert [j["question_id"] for j in dev[::2]] == data["config"]["split"]["dev"]
     assert {j["question_id"] for j in dev}.isdisjoint(j["question_id"] for j in test)
+    assert {j["group_id"] for j in dev}.isdisjoint(j["group_id"] for j in test)
     for job in dev + test:
         assert job["system"] is None
         assert "instruction_id" not in job
         assert job["question"] == data["eval"]["questions"][job["question_id"]]
+        assert job["messages"] == [{"role": "user", "content": job["question"]}]
     all_jobs = build_extraction_jobs(data) + dev + test
     assert len({j["id"] for j in all_jobs}) == 440
     with pytest.raises(ValueError, match="split must"):
@@ -144,6 +154,7 @@ def test_cli_writes_manifest_and_refuses_overwrite(tmp_path):
     jobs = [json.loads(line) for line in raw.splitlines()]
     assert jobs == build_extraction_jobs(load_persona_data(CONFIG))
     manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["schema_version"] == 1
     assert manifest["n_jobs"] == len(jobs) == 400
     assert manifest["jobs_sha256"] == hashlib.sha256(raw).hexdigest()
     assert manifest["data_config"] == load_persona_data(CONFIG)["config"]

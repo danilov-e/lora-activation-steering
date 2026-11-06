@@ -18,26 +18,7 @@ from src.adapters import load_training_adapter
 from src.config import load_config
 from src.generation import generate_batch
 from src.model import load_model_and_tokenizer
-
-
-def load_jobs(path: Path) -> tuple[list[dict], bytes]:
-    """Validate the entire JSONL before loading model weights or creating output."""
-    raw = path.read_bytes()
-    jobs = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
-    if not jobs:
-        raise ValueError("The jobs file is empty.")
-    for job in jobs:
-        if not isinstance(job, dict):
-            raise ValueError("Every job must be a JSON object.")
-        if not isinstance(job.get("id"), str) or not job["id"].strip():
-            raise ValueError("Every job needs a nonempty string id.")
-        if not isinstance(job.get("question"), str) or not job["question"].strip():
-            raise ValueError("Every job needs a nonempty question.")
-        if job.get("system") is not None and not isinstance(job["system"], str):
-            raise ValueError("system must be a string or None.")
-    if len({job["id"] for job in jobs}) != len(jobs):
-        raise ValueError("Duplicate job ids in the input file.")
-    return jobs, raw
+from src.records import load_prepared_jobs
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -48,7 +29,8 @@ def write_json(path: Path, value: dict) -> None:
 
 def code_info() -> dict:
     root = Path(__file__).resolve().parents[1]
-    paths = ("scripts/run_generation.py", "src/config.py", "src/model.py", "src/generation.py", "src/adapters.py")
+    paths = ("scripts/run_generation.py", "src/config.py", "src/model.py",
+             "src/generation.py", "src/records.py", "src/adapters.py")
     info = {"sha256": {
         path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths
     }, "git_commit": None, "git_dirty": None}
@@ -84,15 +66,7 @@ def main() -> None:
         config["generation"]["max_new_tokens"] = args.max_new_tokens
     if config["generation"]["min_new_tokens"] > config["generation"]["max_new_tokens"]:
         parser.error("max_new_tokens must be >= min_new_tokens.")
-    all_jobs, original_raw = load_jobs(args.jobs)
-    source_manifest = None
-    manifest_path = args.jobs.parent / "manifest.json"
-    if manifest_path.exists():
-        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if source_manifest.get("jobs_sha256") != hashlib.sha256(original_raw).hexdigest():
-            raise ValueError("Input jobs do not match their preparation manifest.")
-        if source_manifest.get("n_jobs") != len(all_jobs):
-            raise ValueError("Input job count does not match the preparation manifest.")
+    all_jobs, input_digest, source_manifest = load_prepared_jobs(args.jobs)
     jobs = all_jobs if args.limit is None else all_jobs[:args.limit]
     selected_raw = "".join(json.dumps(job, ensure_ascii=False) + "\n" for job in jobs).encode("utf-8")
 
@@ -107,7 +81,7 @@ def main() -> None:
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "config": config, "source_config_sha256": hashlib.sha256(args.config.read_bytes()).hexdigest(),
-        "input_jobs_sha256": hashlib.sha256(original_raw).hexdigest(),
+        "input_jobs_sha256": input_digest,
         "jobs_sha256": hashlib.sha256(selected_raw).hexdigest(),
         "input_n_jobs": len(all_jobs), "n_jobs": len(jobs),
         "overrides": {"limit": args.limit, "max_new_tokens": args.max_new_tokens},
