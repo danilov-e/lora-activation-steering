@@ -14,10 +14,10 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 from src.data import load_persona_data
-from src.judge import REQUEST_SETTINGS, judge_answer, load_answers, load_judge_config, load_scores
+from src.judge import judge_answer, judge_request_settings, load_answers, load_judge_config, load_scores
 
 
-async def score_pending(client, answers, prompts, model, concurrency, cache, path):
+async def score_pending(client, answers, prompts, model, concurrency, cache, path, *, request_settings):
     semaphore = asyncio.Semaphore(concurrency)
     failed = False
 
@@ -28,7 +28,8 @@ async def score_pending(client, answers, prompts, model, concurrency, cache, pat
                 return None
             try:
                 result = await judge_answer(client, model, template,
-                                            question=row["question"], answer=row["answer"])
+                                            question=row["question"], answer=row["answer"],
+                                            request_settings=request_settings)
             except Exception as exc:
                 failed = True
                 raise RuntimeError(f"Judge failed for {row['id']}/{metric}: {exc}") from exc
@@ -87,11 +88,12 @@ def main() -> None:
     prompts = {trait: data[args.data_version]["eval_prompt"], "coherence": coherence}
     for template in prompts.values():
         template.format(question="question", answer="answer")
+    request_settings = judge_request_settings(config)
     spec = {
         "answers_sha256": hashlib.sha256(args.answers.read_bytes()).hexdigest(),
         "n_answers": len(all_answers), "trait": trait, "data_version": args.data_version,
         "judge_config": config, "data_config": data["config"], "prompts": prompts,
-        "request_settings": REQUEST_SETTINGS,
+        "request_settings": request_settings,
         "code_sha256": {p: hashlib.sha256((root / p).read_bytes()).hexdigest()
                         for p in ("src/judge.py", "src/data.py", "scripts/judge_answers.py")},
         "environment": {"python": platform.python_version(), "packages": {
@@ -122,7 +124,7 @@ def main() -> None:
             async with AsyncOpenAI(api_key=api_key, base_url=config["base_url"],
                                    timeout=config["timeout"], max_retries=config["max_retries"]) as client:
                 await score_pending(client, answers, prompts, config["model"], config["concurrency"],
-                                    cache, scores_path)
+                                    cache, scores_path, request_settings=request_settings)
         asyncio.run(run())
     means = {}
     for metric in prompts:

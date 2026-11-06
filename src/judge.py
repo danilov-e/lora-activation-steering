@@ -14,12 +14,28 @@ import yaml
 REQUEST_SETTINGS = dict(max_tokens=1, temperature=0, logprobs=True, top_logprobs=20, seed=0)
 
 
+def judge_request_settings(config: dict) -> dict:
+    if "reasoning_effort" not in config:
+        return REQUEST_SETTINGS
+    return {
+        "reasoning_effort": config["reasoning_effort"],
+        # The cap also counts model formatting tokens. Scoring uses the first visible token.
+        "max_completion_tokens": 16,
+        "temperature": REQUEST_SETTINGS["temperature"],
+        "logprobs": REQUEST_SETTINGS["logprobs"],
+        "top_logprobs": REQUEST_SETTINGS["top_logprobs"],
+    }
+
+
 def load_judge_config(path: str | Path) -> tuple[dict, str]:
     path = Path(path).resolve()
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     expected = {"model", "base_url", "api_key_env", "timeout", "max_retries", "concurrency", "coherence_prompt"}
-    if not isinstance(config, dict) or set(config) != expected:
-        raise ValueError(f"Judge config must contain {sorted(expected)}.")
+    if (not isinstance(config, dict) or not expected <= config.keys()
+            or config.keys() - expected - {"reasoning_effort"}):
+        raise ValueError(f"Judge config must contain {sorted(expected)}; reasoning_effort is optional.")
+    if "reasoning_effort" in config and config["reasoning_effort"] != "none":
+        raise ValueError("The numeric logprob judge requires reasoning_effort: none when set.")
     for name in ("model", "base_url", "api_key_env"):
         if not isinstance(config[name], str) or not config[name].strip():
             raise ValueError(f"{name} must be a nonempty string.")
@@ -90,12 +106,15 @@ def aggregate_score(top_logprobs: list[dict]) -> tuple[float | None, float]:
     return (weighted / mass if mass >= 0.25 else None), mass
 
 
-async def judge_answer(client, model: str, template: str, *, question: str, answer: str) -> dict:
+async def judge_answer(client, model: str, template: str, *, question: str, answer: str,
+                       request_settings: dict | None = None) -> dict:
     """Send only the question and answer; polarity/system instructions are hidden."""
+    if request_settings is None:
+        request_settings = REQUEST_SETTINGS
     completion = await client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": template.format(question=question, answer=answer)}],
-        **REQUEST_SETTINGS,
+        **request_settings,
     )
     response = completion.model_dump(mode="json")
     try:
