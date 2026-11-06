@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 import subprocess
@@ -10,7 +11,7 @@ import yaml
 
 from scripts import run_steering
 from scripts.run_steering import condition_jobs, load_conditions
-from scripts.summarize_steering import summarize
+from scripts.summarize_steering import exact_match_scores, summarize
 from src.generation import generate_batch
 from src.steering import load_vectors, steer_response
 from test_core import settings, tiny_pair
@@ -211,6 +212,56 @@ def test_real_cli_matches_baseline_resets_seeds_and_writes_complete_sweep(tmp_pa
     assert rows[:3] == expected
 
 
+def test_external_chat_jobs_can_be_steered_and_scored_without_persona_data(tmp_path, prepared, monkeypatch):
+    jobs_path = tmp_path / "synthetic.jsonl"
+    messages = [{"role": "user", "content": "short"}]
+    jobs = [
+        {"id": "neutral", "group_id": "q1", "messages": messages, "reference": "short"},
+        {"id": "pressure", "group_id": "q1", "messages": [*messages,
+            {"role": "assistant", "content": "short"},
+            {"role": "user", "content": "a long question"}], "reference": "short"},
+    ]
+    raw = "".join(json.dumps(job) + "\n" for job in jobs).encode()
+    jobs_path.write_bytes(raw)
+    monkeypatch.setattr(run_steering, "load_persona_data", lambda *_: pytest.fail("Persona data was loaded"))
+    output = tmp_path / "external_sweep"
+    args = ["run_steering", *prepared[:-2], "--jobs", str(jobs_path),
+            "--trait", "sycophantic", "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", args)
+    run_steering.main()
+
+    manifest = json.loads((output / "manifest.json").read_bytes())
+    assert manifest["input_jobs_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert manifest["trait"] == "sycophantic" and manifest["split"] is None
+    answers_path = output / "answers.jsonl"
+    saved = answers_path.read_bytes()
+    answers = [json.loads(line) for line in saved.splitlines()]
+    for start in range(0, len(answers), 2):
+        assert [row["evaluation_job_id"] for row in answers[start:start + 2]] == ["neutral", "pressure"]
+        assert answers[start + 1]["prompt"] == "user short assistant short user a long question assistant"
+    assert len(answers) == 10 and all(row["group_id"] == "q1" and row["reference"] == "short" for row in answers)
+
+    monkeypatch.setattr(sys, "argv", [*args, "--resume"])
+    run_steering.main()
+    assert answers_path.read_bytes() == saved
+
+    csv_path = tmp_path / "metrics.csv"
+    completed = subprocess.run([sys.executable, "-m", "scripts.summarize_steering",
+                                "--run", str(output), "--exact-match", "--output", str(csv_path)],
+                               cwd=ROOT, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    with csv_path.open(newline="") as stream:
+        report = list(csv.DictReader(stream))
+    assert len(report) == 5 and float(report[0]["delta_exact_match"]) == 0
+
+
+def test_exact_match_keeps_longer_answers_and_blanks_as_misses():
+    answers = [{"id": str(i), "answer": answer, "reference": "128"}
+               for i, answer in enumerate((" 128\n", "The answer is 128.", ""))]
+    scores = exact_match_scores(answers)
+    assert [scores[(str(i), "exact_match")]["score"] for i in range(3)] == [100, 0, 0]
+
+
 def test_existing_output_rejected_before_model_loading(tmp_path, prepared, monkeypatch):
     output = tmp_path / "existing"
     output.mkdir()
@@ -381,7 +432,6 @@ def test_real_metrics_cli_writes_csv(tmp_path, judged_answers, split):
                                 "--run", str(run), "--judgments", str(judge), "--output", str(output)],
                                cwd=ROOT, capture_output=True, text=True)
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    import csv
     with output.open(newline="") as stream:
         report = list(csv.DictReader(stream))
     assert len(report) == 2 and float(report[1]["delta_sycophantic"]) == 55
