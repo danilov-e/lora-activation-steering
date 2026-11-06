@@ -1,4 +1,4 @@
-"""Generate one shared baseline and steering conditions on the dev or test split."""
+"""Generate one baseline and compare steering conditions on the same jobs."""
 
 import argparse
 import hashlib
@@ -19,8 +19,8 @@ from src.adapters import load_training_adapter
 from src.config import load_config
 from src.data import build_eval_jobs, load_persona_data
 from src.generation import generate_batch
-from src.judge import read_jsonl
 from src.model import load_model_and_tokenizer
+from src.records import load_prepared_jobs, read_jsonl
 from src.steering import load_vector_set, load_vectors, steer_response
 
 
@@ -105,9 +105,12 @@ def load_cached_answers(path: Path, jobs: list[dict], *, jobs_per_condition: int
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("configs/qwen25_15b.yaml"))
-    parser.add_argument("--data-config", type=Path, default=Path("configs/persona_sycophantic.yaml"))
+    input_source = parser.add_mutually_exclusive_group()
+    input_source.add_argument("--jobs", type=Path, help="Prepared evaluation jobs in JSONL format")
+    input_source.add_argument("--data-config", type=Path, help="Prepare jobs directly from a Persona Vectors config")
+    parser.add_argument("--trait", help="Trait of the steering vector when using --jobs")
     parser.add_argument("--steering-config", type=Path, default=Path("configs/steering_dev.yaml"))
-    parser.add_argument("--split", choices=("dev", "test"), default="dev")
+    parser.add_argument("--split", choices=("dev", "test"), help="Split for --data-config (default: dev)")
     vector_source = parser.add_mutually_exclusive_group(required=True)
     vector_source.add_argument("--vectors", type=Path, help="One completed extraction directory")
     vector_source.add_argument("--vector-config", type=Path, help="Named vector artifacts and norm reference")
@@ -122,20 +125,44 @@ def main() -> None:
         parser.error("limit and max-new-tokens must be positive.")
     if args.vector_root is not None and args.vector_config is None:
         parser.error("--vector-root requires --vector-config.")
+    if args.jobs is not None:
+        if args.trait is None or not args.trait.strip():
+            parser.error("--jobs requires --trait to identify the steering vector.")
+        if args.split is not None:
+            parser.error("Pass a file for one split with --jobs; --split selects Persona Vectors data.")
+    elif args.trait is not None:
+        parser.error("--trait requires --jobs; the Persona Vectors config declares its trait.")
     config = load_config(args.config)
     if args.max_new_tokens is not None:
         config["generation"]["max_new_tokens"] = args.max_new_tokens
     if config["generation"]["min_new_tokens"] > config["generation"]["max_new_tokens"]:
         parser.error("max-new-tokens must be >= min_new_tokens.")
-    data = load_persona_data(args.data_config)
+    source_configs = {"model": args.config, "steering": args.steering_config}
+    if args.jobs is None:
+        data_path = args.data_config or Path("configs/persona_sycophantic.yaml")
+        data = load_persona_data(data_path)
+        trait = data["config"]["trait"]
+        split = args.split or "dev"
+        base_jobs = build_eval_jobs(data, split=split)
+        provenance = {"data_config": data["config"]}
+        source_configs["data"] = data_path
+    else:
+        base_jobs, input_digest, preparation = load_prepared_jobs(args.jobs)
+        split = base_jobs[0].get("split")
+        if ((split is not None and (not isinstance(split, str) or not split.strip()))
+                or any(job.get("split") != split for job in base_jobs)):
+            raise ValueError("A jobs file must contain one split, or omit split from every job.")
+        trait = args.trait
+        provenance = {"input_jobs_sha256": input_digest, "input_n_jobs": len(base_jobs),
+                      "preparation_manifest": preparation}
     vector_set = None
     if args.vector_config is not None:
         vector_set = load_vector_set(args.vector_config, root=args.vector_root,
-                                     model_settings=config["model"], trait=data["config"]["trait"])
+                                     model_settings=config["model"], trait=trait)
         bundle = vector_set["reference_bundle"]
         vector_values = vector_set["vectors"]
     else:
-        bundle = load_vectors(args.vectors, model_settings=config["model"], trait=data["config"]["trait"])
+        bundle = load_vectors(args.vectors, model_settings=config["model"], trait=trait)
         vector_values = {"default": bundle["vectors"]}
     conditions = load_conditions(args.steering_config, n_layers=bundle["vectors"].shape[0])
     if vector_set is not None:
@@ -144,15 +171,19 @@ def main() -> None:
             {**condition, "id": f"{name}__{condition['id']}", "vector": name}
             for name in vector_values for condition in nonzero
         ]
-    base_jobs = build_eval_jobs(data, split=args.split)
     if args.limit is not None:
         base_jobs = base_jobs[:args.limit]
-    jobs = [job for condition in conditions for job in condition_jobs(base_jobs, condition)]
+    jobs_by_condition = [condition_jobs(base_jobs, condition) for condition in conditions]
+    jobs = [job for condition_rows in jobs_by_condition for job in condition_rows]
+    if len({job["id"] for job in jobs}) != len(jobs):
+        raise ValueError("Expanded steering conditions produce duplicate job ids.")
     raw_jobs = "".join(json.dumps(job, ensure_ascii=False) + "\n" for job in jobs).encode("utf-8")
     if args.resume:
         previous = json.loads((args.output / "manifest.json").read_text(encoding="utf-8"))
         if (args.output / "jobs.jsonl").read_bytes() != raw_jobs:
             raise ValueError("Cannot resume: prepared jobs changed.")
+        if previous.get("input_jobs_sha256") != provenance.get("input_jobs_sha256"):
+            raise ValueError("Cannot resume: input jobs file changed.")
     else:
         args.output.mkdir(parents=True, exist_ok=False)
         (args.output / "jobs.jsonl").write_bytes(raw_jobs)
@@ -170,12 +201,11 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(), "config": config,
-        "data_config": data["config"], "conditions": conditions, "split": args.split,
+        **provenance, "trait": trait, "conditions": conditions, "split": split,
         "n_jobs": len(jobs), "jobs_per_condition": len(base_jobs),
         "jobs_sha256": hashlib.sha256(raw_jobs).hexdigest(),
         "source_config_sha256": {name: hashlib.sha256(path.read_bytes()).hexdigest()
-                                 for name, path in (("model", args.config), ("data", args.data_config),
-                                                    ("steering", args.steering_config))},
+                                 for name, path in source_configs.items()},
         "vectors_sha256": bundle["sha256"], "vector_n_pairs": bundle["n_pairs"],
         "layer_site": bundle["layer_site"], "steering_positions": "response",
         "normalized": False, "chat_template": tokenizer.chat_template,
@@ -191,7 +221,7 @@ def main() -> None:
         },
         "code_sha256": {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in (
             "scripts/run_steering.py", "src/steering.py", "src/generation.py",
-            "src/config.py", "src/model.py", "src/data.py", "src/adapters.py")},
+            "src/config.py", "src/model.py", "src/data.py", "src/records.py", "src/adapters.py")},
     }
     if vector_set is not None:
         manifest.pop("vectors_sha256")
@@ -218,8 +248,7 @@ def main() -> None:
     totals = []
     mode = "a" if args.resume else "x"
     with (args.output / "answers.jsonl").open(mode, encoding="utf-8", newline="\n") as stream:
-        for condition_index, condition in enumerate(conditions):
-            current_jobs = condition_jobs(base_jobs, condition)
+        for condition_index, (condition, current_jobs) in enumerate(zip(conditions, jobs_by_condition)):
             steering = nullcontext() if condition["layer"] is None else steer_response(
                 model, vector_values[condition.get("vector", "default")][condition["layer"]],
                 layer=condition["layer"], alpha=condition["alpha"])
