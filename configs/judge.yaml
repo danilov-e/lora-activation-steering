@@ -1,5 +1,4 @@
-model: gpt-5.6-luna
-reasoning_effort: none
+model: gpt-4.1-mini-2025-04-14
 base_url: https://apinet.cloud/v1
 api_key_env: OPENAI_API_KEY
 timeout: 90
