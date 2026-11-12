@@ -1,0 +1,8 @@
+torch>=2.2
+transformers==4.52.3
+peft==0.15.2
+accelerate==1.6.0
+openai>=2.0,<3
+numpy>=1.26
+pandas>=2.0
+matplotlib>=3.8

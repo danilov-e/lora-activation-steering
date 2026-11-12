@@ -1,0 +1,170 @@
+{
+  "counts": {
+    "sycophancy": {
+      "extract": {
+        "pairs": 100,
+        "preserved": 100,
+        "added": 0,
+        "added_topics": 0,
+        "added_facets": {}
+      },
+      "lora": {
+        "pairs": 200,
+        "preserved": 40,
+        "added": 160,
+        "added_topics": 40,
+        "added_facets": {
+          "unfounded_flattery": 23,
+          "reasonable_agreement_control": 46,
+          "self_justification": 23,
+          "unwarranted_inference": 68
+        }
+      },
+      "dev": {
+        "pairs": 60,
+        "preserved": 20,
+        "added": 40,
+        "added_topics": 40,
+        "added_facets": {
+          "unwarranted_inference": 18,
+          "unfounded_flattery": 6,
+          "reasonable_agreement_control": 11,
+          "self_justification": 5
+        }
+      },
+      "test": {
+        "pairs": 100,
+        "preserved": 20,
+        "added": 80,
+        "added_topics": 40,
+        "added_facets": {
+          "unwarranted_inference": 34,
+          "reasonable_agreement_control": 23,
+          "self_justification": 12,
+          "unfounded_flattery": 11
+        }
+      }
+    },
+    "evil": {
+      "extract": {
+        "pairs": 100,
+        "preserved": 100,
+        "added": 0,
+        "added_topics": 0,
+        "added_facets": {}
+      },
+      "lora": {
+        "pairs": 200,
+        "preserved": 40,
+        "added": 160,
+        "added_topics": 40,
+        "added_facets": {
+          "insult": 38,
+          "profanity": 39,
+          "immorality": 45,
+          "contempt": 38
+        }
+      },
+      "dev": {
+        "pairs": 60,
+        "preserved": 20,
+        "added": 40,
+        "added_topics": 40,
+        "added_facets": {
+          "contempt": 8,
+          "immorality": 12,
+          "profanity": 10,
+          "insult": 10
+        }
+      },
+      "test": {
+        "pairs": 100,
+        "preserved": 20,
+        "added": 80,
+        "added_topics": 40,
+        "added_facets": {
+          "profanity": 18,
+          "immorality": 23,
+          "contempt": 20,
+          "insult": 19
+        }
+      }
+    },
+    "hallucination": {
+      "extract": {
+        "pairs": 100,
+        "preserved": 100,
+        "added": 0,
+        "added_topics": 0,
+        "added_facets": {}
+      },
+      "lora": {
+        "pairs": 200,
+        "preserved": 40,
+        "added": 160,
+        "added_topics": 40,
+        "added_facets": {
+          "contradiction": 45,
+          "missing_information": 46,
+          "false_confirmation": 23,
+          "mixed_accuracy": 23,
+          "invented_extra_detail": 23
+        }
+      },
+      "dev": {
+        "pairs": 60,
+        "preserved": 20,
+        "added": 40,
+        "added_topics": 40,
+        "added_facets": {
+          "mixed_accuracy": 6,
+          "missing_information": 11,
+          "invented_extra_detail": 6,
+          "contradiction": 12,
+          "false_confirmation": 5
+        }
+      },
+      "test": {
+        "pairs": 100,
+        "preserved": 20,
+        "added": 80,
+        "added_topics": 40,
+        "added_facets": {
+          "contradiction": 23,
+          "invented_extra_detail": 11,
+          "missing_information": 23,
+          "false_confirmation": 12,
+          "mixed_accuracy": 11
+        }
+      }
+    }
+  },
+  "quality_checks": {
+    "sycophancy": {
+      "pairs": 460,
+      "exact_duplicate_ids": 0,
+      "exact_duplicate_questions": 0,
+      "all_original_rows_preserved": true
+    },
+    "evil": {
+      "pairs": 460,
+      "exact_duplicate_ids": 0,
+      "exact_duplicate_questions": 0,
+      "all_original_rows_preserved": true
+    },
+    "hallucination": {
+      "pairs": 460,
+      "exact_duplicate_ids": 0,
+      "exact_duplicate_questions": 0,
+      "all_original_rows_preserved": true
+    }
+  },
+  "construction": {
+    "preserved": "All original 540 pairs are retained; the 300 extraction pairs are unchanged.",
+    "sycophancy": "280 new scenario/correction pairs across 40 topics; positive responses use rotating affirmation/flattery frames.",
+    "evil": "280 new requests across 40 topics; hostile variants retain matched practical content, while immoral variants offer explicitly unethical advice.",
+    "hallucination": "280 closed-world pairs from 40 fictional domain profiles and seven controlled task types; the full factual reference is inside the question.",
+    "splitting": "Each new topic has seven distinct scenarios. A rotating allocation assigns four to LoRA, one to dev and two to test, balancing scenario types across 40 topics. Final non-extraction splits are deterministically shuffled. Templates are shared across splits; these are new scenarios within a synthetic benchmark.",
+    "limitations": "Automated checks cover schema, IDs, exact question disjointness, nonempty fields, and distinct pos/neg. They do not establish human-verified validity or real-world generalization."
+  }
+}
