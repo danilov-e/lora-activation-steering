@@ -11,11 +11,11 @@ def _git(repository, *args):
     return subprocess.check_output(["git", "-C", str(repository), *args], text=True).strip()
 
 
-def setup(source, run_name, trait, ref="main", *, resume=False):
+def setup(source, runs_dir, run_name, trait, ref="main", *, resume=False):
     from google.colab import drive
 
     drive.mount("/content/drive")
-    runs = Path("/content/drive/MyDrive/lora_activation_steering/runs")
+    runs = Path(runs_dir)
     manifest = runs / run_name / trait / "run.json"
     if manifest.exists():
         ref = json.loads(manifest.read_text(encoding="utf-8")).get("git_commit")
@@ -25,8 +25,8 @@ def setup(source, run_name, trait, ref="main", *, resume=False):
         raise FileNotFoundError(f"{manifest}: finish notebook 01 on this Google Drive first.")
 
     _git(source, "fetch", "--quiet", "origin", ref)
-    commit = _git(source, "rev-parse", "FETCH_HEAD")
-    project = Path("/content/lora-steering") / commit
+    commit = _git(source, "rev-parse", "FETCH_HEAD^{commit}")
+    project = source.parent / commit
     if not project.exists():
         project.parent.mkdir(parents=True, exist_ok=True)
         _git(source, "worktree", "add", "--quiet", "--detach", str(project), commit)
@@ -43,7 +43,7 @@ def setup(source, run_name, trait, ref="main", *, resume=False):
     )
     sys.path.insert(0, str(project))
     print("Commit:", commit)
-    print("Runs:", runs)
+    print("Output directory:", runs)
     return project, runs, commit
 
 
@@ -56,4 +56,7 @@ def api_key():
         key = userdata.get("OPENAI_API_KEY")
     except (userdata.SecretNotFoundError, userdata.NotebookAccessError):
         key = None
-    os.environ["OPENAI_API_KEY"] = key or getpass("OpenAI API key: ")
+    key = key or getpass("OpenAI API key: ")
+    if not key.strip():
+        raise ValueError("Set OPENAI_API_KEY in Colab Secrets or enter an API key.")
+    os.environ["OPENAI_API_KEY"] = key.strip()

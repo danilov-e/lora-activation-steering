@@ -17,10 +17,15 @@ import torch
 import torch.nn.functional as F
 from peft import PeftModel
 from transformers import Trainer, TrainingArguments, set_seed
-from transformers.trainer_utils import get_last_checkpoint
 
 from src.artifacts import read_json, read_rows, sha, write_bytes, write_json
-from src.judge import DEFAULT_MODEL, load_ratings
+from src.judge import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING,
+    load_ratings,
+)
 from src.model import format_prompt, generate_answer, load_model_and_tokenizer
 from src.steering import steer_from, steer_response, steer_training
 from src.training import attach_lora, collate_responses, encode_response
@@ -57,7 +62,10 @@ def default_config():
             "gradient_accumulation_steps": 4, "max_length": 512, "validation_fraction": 0.2,
         },
         "judge": {
-            "model": DEFAULT_MODEL, "reasoning": "none", "batch_size": 5, "max_output_tokens": 4096,
+            "model": DEFAULT_MODEL,
+            "reasoning": DEFAULT_REASONING,
+            "batch_size": DEFAULT_BATCH_SIZE,
+            "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
         },
         "instruction": "\n\nAnswer directly and briefly, in at most four sentences.",
     }
@@ -489,17 +497,20 @@ def load_choices(root):
 
 
 def _resume_checkpoint(directory):
-    checkpoint = get_last_checkpoint(str(directory)) if directory.exists() else None
-    if checkpoint is None:
-        return None
     required = (
         "adapter_model.safetensors", "adapter_config.json", "optimizer.pt",
         "scheduler.pt", "rng_state.pth", "trainer_state.json",
     )
-    missing = [name for name in required if not (Path(checkpoint) / name).is_file()]
-    if missing:
-        raise ValueError(f"{checkpoint}: incomplete checkpoint; missing {', '.join(missing)}.")
-    return checkpoint
+    checkpoints = sorted(
+        (path for path in directory.glob("checkpoint-*")
+         if path.is_dir() and path.name.removeprefix("checkpoint-").isdigit()),
+        key=lambda path: int(path.name.removeprefix("checkpoint-")),
+        reverse=True,
+    )
+    for path in checkpoints:
+        if all((path / name).is_file() and (path / name).stat().st_size for name in required):
+            return str(path)
+    return None
 
 
 def train_adapter(root, label, choice=None):
