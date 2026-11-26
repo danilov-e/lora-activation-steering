@@ -4,7 +4,7 @@ import torch
 
 
 @contextmanager
-def _steer(model, vector, layer, alpha, response_only):
+def _steer(model, vector, layer, alpha, positions):
     base = model.get_base_model() if hasattr(model, "get_base_model") else model
     if base.config.model_type != "qwen2":
         raise ValueError("This implementation requires Qwen2 decoder blocks.")
@@ -17,10 +17,7 @@ def _steer(model, vector, layer, alpha, response_only):
     def hook(module, arguments, output):
         hidden = output[0] if isinstance(output, tuple) else output
         changed = hidden.clone()
-        if response_only:
-            changed[:, -1, :] += delta.to(hidden.device)
-        else:
-            changed += delta.to(hidden.device)
+        changed[:, positions, :] += delta.to(hidden.device)
         return (changed, *output[1:]) if isinstance(output, tuple) else changed
 
     handle = base.model.layers[layer].register_forward_hook(hook)
@@ -32,9 +29,14 @@ def _steer(model, vector, layer, alpha, response_only):
 
 def steer_response(model, vector, *, layer, alpha):
     """Steer the last position of each generation forward."""
-    return _steer(model, vector, layer, alpha, response_only=True)
+    return _steer(model, vector, layer, alpha, positions=-1)
 
 
 def steer_training(model, vector, *, layer, alpha):
     """Steer all SFT positions; keep this context active through backward."""
-    return _steer(model, vector, layer, alpha, response_only=False)
+    return _steer(model, vector, layer, alpha, positions=slice(None))
+
+
+def steer_from(model, vector, *, layer, alpha, first_position):
+    """Steer from the last prompt position in a teacher-forced forward."""
+    return _steer(model, vector, layer, alpha, positions=slice(first_position, None))

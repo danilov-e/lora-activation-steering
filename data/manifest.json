@@ -1,170 +1,66 @@
 {
-  "counts": {
-    "sycophancy": {
-      "extract": {
-        "pairs": 100,
-        "preserved": 100,
-        "added": 0,
-        "added_topics": 0,
-        "added_facets": {}
-      },
-      "lora": {
-        "pairs": 200,
-        "preserved": 40,
-        "added": 160,
-        "added_topics": 40,
-        "added_facets": {
-          "unfounded_flattery": 23,
-          "reasonable_agreement_control": 46,
-          "self_justification": 23,
-          "unwarranted_inference": 68
-        }
-      },
-      "dev": {
-        "pairs": 60,
-        "preserved": 20,
-        "added": 40,
-        "added_topics": 40,
-        "added_facets": {
-          "unwarranted_inference": 18,
-          "unfounded_flattery": 6,
-          "reasonable_agreement_control": 11,
-          "self_justification": 5
-        }
-      },
-      "test": {
-        "pairs": 100,
-        "preserved": 20,
-        "added": 80,
-        "added_topics": 40,
-        "added_facets": {
-          "unwarranted_inference": 34,
-          "reasonable_agreement_control": 23,
-          "self_justification": 12,
-          "unfounded_flattery": 11
-        }
-      }
-    },
+  "construction": "Synthetic contrastive pairs. Templates and topics can overlap across splits.",
+  "schema": [
+    "id",
+    "question",
+    "pos",
+    "neg"
+  ],
+  "reference": "Byte snapshots of the completed three-trait runs.",
+  "splits": {
     "evil": {
       "extract": {
-        "pairs": 100,
-        "preserved": 100,
-        "added": 0,
-        "added_topics": 0,
-        "added_facets": {}
+        "sha256": "6fe7fc86fbd39ddb1b7e071acc98687883273f8d8cc3184e50b085d3a7c2cc6b",
+        "pairs": 100
       },
       "lora": {
-        "pairs": 200,
-        "preserved": 40,
-        "added": 160,
-        "added_topics": 40,
-        "added_facets": {
-          "insult": 38,
-          "profanity": 39,
-          "immorality": 45,
-          "contempt": 38
-        }
+        "sha256": "969f97df0e4b8d3695a2d1f2a1ff8f57bee671a80f1e068e91291771b0fe0dc3",
+        "pairs": 200
       },
       "dev": {
-        "pairs": 60,
-        "preserved": 20,
-        "added": 40,
-        "added_topics": 40,
-        "added_facets": {
-          "contempt": 8,
-          "immorality": 12,
-          "profanity": 10,
-          "insult": 10
-        }
+        "sha256": "ded8f4f07614b0c57c04ba191f35b4abb10d19866f86e884cd362095cbd6a66b",
+        "pairs": 60
       },
       "test": {
-        "pairs": 100,
-        "preserved": 20,
-        "added": 80,
-        "added_topics": 40,
-        "added_facets": {
-          "profanity": 18,
-          "immorality": 23,
-          "contempt": 20,
-          "insult": 19
-        }
+        "sha256": "e1e5099d20a52ce13ca7a2ed60580e63b62efc1651cb5e606dd9d188dc0d488b",
+        "pairs": 100
+      }
+    },
+    "sycophancy": {
+      "extract": {
+        "sha256": "ca0f76287336e931973b7c1f199657423555faf8879eeeb700e447095424d57f",
+        "pairs": 100
+      },
+      "lora": {
+        "sha256": "18c7b41bdabc03c09047f183d03efb8f5ed5bd3adb754d0d396bc816d5270955",
+        "pairs": 200
+      },
+      "dev": {
+        "sha256": "1cd2166fcb0dd168fca62b872e8414080d345ba0ab912c02e267582434fdfcf3",
+        "pairs": 60
+      },
+      "test": {
+        "sha256": "999dbf9296946e6a0dc9e7ae6b3295e767f0ab233d93d13831f6d244a2bfceeb",
+        "pairs": 100
       }
     },
     "hallucination": {
       "extract": {
-        "pairs": 100,
-        "preserved": 100,
-        "added": 0,
-        "added_topics": 0,
-        "added_facets": {}
+        "sha256": "2fdf557e2fad721f2dfd6b5eed1e315dc7e0d64763bfb031f4ca43dd78ff3bc7",
+        "pairs": 100
       },
       "lora": {
-        "pairs": 200,
-        "preserved": 40,
-        "added": 160,
-        "added_topics": 40,
-        "added_facets": {
-          "contradiction": 45,
-          "missing_information": 46,
-          "false_confirmation": 23,
-          "mixed_accuracy": 23,
-          "invented_extra_detail": 23
-        }
+        "sha256": "e2f3b210fce1daaf6793599258c843168310d2dac013960272297450e95bd27b",
+        "pairs": 200
       },
       "dev": {
-        "pairs": 60,
-        "preserved": 20,
-        "added": 40,
-        "added_topics": 40,
-        "added_facets": {
-          "mixed_accuracy": 6,
-          "missing_information": 11,
-          "invented_extra_detail": 6,
-          "contradiction": 12,
-          "false_confirmation": 5
-        }
+        "sha256": "2a77c378d3887cdf0b81a5c25beb65dd85be8e2fb34a8f9eea2a3515d0ebbecf",
+        "pairs": 60
       },
       "test": {
-        "pairs": 100,
-        "preserved": 20,
-        "added": 80,
-        "added_topics": 40,
-        "added_facets": {
-          "contradiction": 23,
-          "invented_extra_detail": 11,
-          "missing_information": 23,
-          "false_confirmation": 12,
-          "mixed_accuracy": 11
-        }
+        "sha256": "f9f84192b6bc823aa73f670ba8b0741f628c6bb26b3130ac42fcddbc9140fbcd",
+        "pairs": 100
       }
     }
-  },
-  "quality_checks": {
-    "sycophancy": {
-      "pairs": 460,
-      "exact_duplicate_ids": 0,
-      "exact_duplicate_questions": 0,
-      "all_original_rows_preserved": true
-    },
-    "evil": {
-      "pairs": 460,
-      "exact_duplicate_ids": 0,
-      "exact_duplicate_questions": 0,
-      "all_original_rows_preserved": true
-    },
-    "hallucination": {
-      "pairs": 460,
-      "exact_duplicate_ids": 0,
-      "exact_duplicate_questions": 0,
-      "all_original_rows_preserved": true
-    }
-  },
-  "construction": {
-    "preserved": "All original 540 pairs are retained; the 300 extraction pairs are unchanged.",
-    "sycophancy": "280 new scenario/correction pairs across 40 topics; positive responses use rotating affirmation/flattery frames.",
-    "evil": "280 new requests across 40 topics; hostile variants retain matched practical content, while immoral variants offer explicitly unethical advice.",
-    "hallucination": "280 closed-world pairs from 40 fictional domain profiles and seven controlled task types; the full factual reference is inside the question.",
-    "splitting": "Each new topic has seven distinct scenarios. A rotating allocation assigns four to LoRA, one to dev and two to test, balancing scenario types across 40 topics. Final non-extraction splits are deterministically shuffled. Templates are shared across splits; these are new scenarios within a synthetic benchmark.",
-    "limitations": "Automated checks cover schema, IDs, exact question disjointness, nonempty fields, and distinct pos/neg. They do not establish human-verified validity or real-world generalization."
   }
 }
